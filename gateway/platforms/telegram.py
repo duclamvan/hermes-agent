@@ -3588,7 +3588,7 @@ class TelegramAdapter(BasePlatformAdapter):
             await self._set_reaction(
                 chat_id,
                 message_id,
-                self._reaction_emoji("TELEGRAM_REACTION_START_EMOJI", "\U0001f440"),
+                self._reaction_emoji("TELEGRAM_REACTION_START_EMOJI", "\u26a1"),
             )
 
     async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
