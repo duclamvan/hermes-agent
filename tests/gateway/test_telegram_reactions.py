@@ -126,8 +126,8 @@ async def test_set_reaction_handles_api_error_gracefully(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_on_processing_start_adds_eyes_reaction(monkeypatch):
-    """Processing start should add eyes reaction when enabled."""
+async def test_on_processing_start_adds_zap_reaction(monkeypatch):
+    """Processing start should add zap reaction when enabled."""
     monkeypatch.setenv("TELEGRAM_REACTIONS", "true")
     adapter = _make_adapter()
     event = _make_event()
@@ -137,7 +137,7 @@ async def test_on_processing_start_adds_eyes_reaction(monkeypatch):
     adapter._bot.set_message_reaction.assert_awaited_once_with(
         chat_id=123,
         message_id=456,
-        reaction="\U0001f440",
+        reaction="\u26a1",
     )
 
 
