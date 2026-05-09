@@ -10490,12 +10490,12 @@ class GatewayRunner:
             try:
                 user_source = source.platform.value if source.platform else None
                 sessions = self._session_db.list_sessions_rich(
-                    source=user_source, limit=10
+                    source=user_source, session_key=session_key, limit=10
                 )
                 titled = [s for s in sessions if s.get("title")]
                 if not titled:
                     return (
-                        "No named sessions found.\n"
+                        "No named sessions found in this chat/topic.\n"
                         "Use `/title My Session` to name your current session, "
                         "then `/resume My Session` to return to it later."
                     )
@@ -10512,11 +10512,11 @@ class GatewayRunner:
                 return f"Could not list sessions: {e}"
 
         # Resolve the name to a session ID.
-        target_id = self._session_db.resolve_session_by_title(name)
+        target_id = self._session_db.resolve_session_by_title(name, session_key=session_key)
         if not target_id:
             return (
                 f"No session found matching '**{name}**'.\n"
-                "Use `/resume` with no arguments to see available sessions."
+                "Use `/resume` with no arguments to see sessions available in this chat/topic."
             )
         # Compression creates child continuations that hold the live transcript.
         # Follow that chain so gateway /resume matches CLI behavior (#15000).

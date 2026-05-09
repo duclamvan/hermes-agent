@@ -931,6 +931,7 @@ class SessionStore:
                 "session_id": session_id,
                 "source": source.platform.value,
                 "user_id": source.user_id,
+                "session_key": session_key,
             }
 
         # SQLite operations outside the lock

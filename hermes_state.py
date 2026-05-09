@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     source TEXT NOT NULL,
     user_id TEXT,
+    session_key TEXT,
     model TEXT,
     model_config TEXT,
     system_prompt TEXT,
@@ -496,6 +497,17 @@ class SessionDB:
         except sqlite3.OperationalError:
             pass  # Index already exists
 
+        # Lookup index for strict gateway/topic session scoping. This must be
+        # created after _reconcile_columns(), because legacy DBs do not have
+        # the session_key column until reconciliation adds it.
+        try:
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sessions_session_key "
+                "ON sessions(session_key)"
+            )
+        except sqlite3.OperationalError:
+            pass
+
         # FTS5 setup (separate because CREATE VIRTUAL TABLE can't be in executescript with IF NOT EXISTS reliably)
         try:
             cursor.execute("SELECT * FROM messages_fts LIMIT 0")
@@ -523,17 +535,19 @@ class SessionDB:
         system_prompt: str = None,
         user_id: str = None,
         parent_session_id: str = None,
+        session_key: str = None,
     ) -> None:
         """Shared INSERT OR IGNORE for session rows."""
         def _do(conn):
             conn.execute(
-                """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
+                """INSERT OR IGNORE INTO sessions (id, source, user_id, session_key, model, model_config,
                    system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
                     user_id,
+                    session_key,
                     model,
                     json.dumps(model_config) if model_config else None,
                     system_prompt,
@@ -883,16 +897,22 @@ class SessionDB:
             row = cursor.fetchone()
         return row["title"] if row else None
 
-    def get_session_by_title(self, title: str) -> Optional[Dict[str, Any]]:
+    def get_session_by_title(self, title: str, session_key: str = None) -> Optional[Dict[str, Any]]:
         """Look up a session by exact title. Returns session dict or None."""
         with self._lock:
-            cursor = self._conn.execute(
-                "SELECT * FROM sessions WHERE title = ?", (title,)
-            )
+            if session_key:
+                cursor = self._conn.execute(
+                    "SELECT * FROM sessions WHERE title = ? AND session_key = ?",
+                    (title, session_key),
+                )
+            else:
+                cursor = self._conn.execute(
+                    "SELECT * FROM sessions WHERE title = ?", (title,)
+                )
             row = cursor.fetchone()
         return dict(row) if row else None
 
-    def resolve_session_by_title(self, title: str) -> Optional[str]:
+    def resolve_session_by_title(self, title: str, session_key: str = None) -> Optional[str]:
         """Resolve a title to a session ID, preferring the latest in a lineage.
 
         If the exact title exists, returns that session's ID.
@@ -901,17 +921,25 @@ class SessionDB:
         latest numbered variant (the most recent continuation).
         """
         # First try exact match
-        exact = self.get_session_by_title(title)
+        exact = self.get_session_by_title(title, session_key=session_key)
 
         # Also search for numbered variants: "title #2", "title #3", etc.
         # Escape SQL LIKE wildcards (%, _) in the title to prevent false matches
         escaped = title.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         with self._lock:
-            cursor = self._conn.execute(
-                "SELECT id, title, started_at FROM sessions "
-                "WHERE title LIKE ? ESCAPE '\\' ORDER BY started_at DESC",
-                (f"{escaped} #%",),
-            )
+            if session_key:
+                cursor = self._conn.execute(
+                    "SELECT id, title, started_at FROM sessions "
+                    "WHERE title LIKE ? ESCAPE '\\' AND session_key = ? "
+                    "ORDER BY started_at DESC",
+                    (f"{escaped} #%", session_key),
+                )
+            else:
+                cursor = self._conn.execute(
+                    "SELECT id, title, started_at FROM sessions "
+                    "WHERE title LIKE ? ESCAPE '\\' ORDER BY started_at DESC",
+                    (f"{escaped} #%",),
+                )
             numbered = cursor.fetchall()
 
         if numbered:
@@ -996,6 +1024,7 @@ class SessionDB:
         self,
         source: str = None,
         exclude_sources: List[str] = None,
+        session_key: str = None,
         limit: int = 20,
         offset: int = 0,
         include_children: bool = False,
@@ -1049,6 +1078,9 @@ class SessionDB:
         if source:
             where_clauses.append("s.source = ?")
             params.append(source)
+        if session_key:
+            where_clauses.append("s.session_key = ?")
+            params.append(session_key)
         if exclude_sources:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")

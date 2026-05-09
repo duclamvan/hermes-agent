@@ -26,6 +26,7 @@ class TestSessionLifecycle:
             session_id="s1",
             source="cli",
             model="test-model",
+            session_key="agent:main:local:dm:test",
         )
         assert sid == "s1"
 
@@ -33,6 +34,7 @@ class TestSessionLifecycle:
         assert session is not None
         assert session["source"] == "cli"
         assert session["model"] == "test-model"
+        assert session["session_key"] == "agent:main:local:dm:test"
         assert session["ended_at"] is None
 
 
@@ -1422,11 +1424,12 @@ class TestSchemaInit:
         columns = {row[1] for row in cursor.fetchall()}
         assert "title" in columns
 
-    def test_topic_mode_schema_is_not_auto_migrated_on_open(self, tmp_path):
-        """Opening an old DB should not add topic-mode columns until /topic opts in.
+    def test_session_key_is_auto_migrated_but_topic_mode_schema_is_not(self, tmp_path):
+        """Opening an old DB adds core session_key, but not Telegram topic tables/columns.
 
-        The gateway must remain rollback-safe: simply upgrading Hermes and starting
-        the old bot should not eagerly mutate the state DB for this feature.
+        session_key is now core session metadata used by /resume scoping. The
+        heavier Telegram /topic feature schema still stays opt-in so old bots
+        remain rollback-safe.
         """
         old_db = tmp_path / "old.db"
         import sqlite3
@@ -1490,7 +1493,8 @@ class TestSchemaInit:
         db = SessionDB(db_path=old_db)
         cursor = db._conn.execute("PRAGMA table_info(sessions)")
         columns = {row[1] for row in cursor.fetchall()}
-        assert {"chat_id", "chat_type", "thread_id", "session_key"}.isdisjoint(columns)
+        assert "session_key" in columns
+        assert {"chat_id", "chat_type", "thread_id"}.isdisjoint(columns)
         db.close()
 
     def test_apply_telegram_topic_migration_creates_topic_tables_explicitly(self, tmp_path):
