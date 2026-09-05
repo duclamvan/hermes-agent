@@ -332,18 +332,52 @@ def _drop_oldest_commit(store: Path, working_dir: str, ref: str) -> bool:
     return _rewrite_ref_to(store, working_dir, ref, _ref_commits_oldest_first(store, working_dir, ref)[1:])
 
 
+def _delete_project_state(store: Path, dir_hash: str) -> None:
+    """Delete one project's ref and sidecars so its objects can be collected."""
+    _delete_ref(store, _ref_name(dir_hash))
+    _unlink_quiet(_index_path(store, dir_hash))
+    _unlink_quiet(_project_meta_path(store, dir_hash))
+    _unlink_quiet(_ledger_path(store, dir_hash))
+
+
 def _shrink_store_to_cap(store: Path, working_dir: str, cap_bytes: int) -> bool:
-    """Round-robin-drop the oldest commit per project ref until the store fits (bounded to 20
-    rounds against pathological loops).  False when there are no project refs."""
+    """Strictly enforce the shared-store cap.
+
+    First discard old revisions while preserving each project's newest snapshot. Git must be
+    collected after every rewrite round; otherwise the on-disk size never falls and the old
+    implementation exhausted its 20 rounds against still-reachable loose objects. If one-snapshot
+    projects alone exceed the cap, evict the least-recently-touched project snapshots until the
+    store fits. A configured hard ceiling must not silently become a per-project minimum.
+    """
+    refs_seen = False
     for _ in range(20):
         if _dir_size_bytes(store) <= cap_bytes:
-            break
+            return True
         refs = _list_project_refs(store, working_dir)
         if not refs:
-            return False
-        if not any([_drop_oldest_commit(store, working_dir, ref) for ref in refs]):
+            return refs_seen
+        refs_seen = True
+        dropped = any([_drop_oldest_commit(store, working_dir, ref) for ref in refs])
+        if not dropped:
             break
-    return True
+        _gc_store(store, working_dir)
+
+    if _dir_size_bytes(store) <= cap_bytes:
+        return True
+
+    projects = sorted(
+        _list_projects(store),
+        key=lambda meta: float(meta.get("last_touch", 0) or 0),
+    )
+    for meta in projects:
+        dir_hash = meta.get("_hash") or ""
+        if not dir_hash:
+            continue
+        _delete_project_state(store, dir_hash)
+        _gc_store(store, working_dir)
+        if _dir_size_bytes(store) <= cap_bytes:
+            return True
+    return refs_seen
 
 
 def _migrate_legacy_store(base: Path) -> Optional[Path]:

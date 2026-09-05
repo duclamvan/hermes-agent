@@ -957,6 +957,43 @@ class TestPruneCheckpointsV2:
         assert not meta_path.exists()
         assert not old_legacy.exists()
 
+    def test_size_cap_evicts_oldest_single_snapshot_project(self, tmp_path, monkeypatch):
+        """A hard cap still works when every project has only one checkpoint.
+
+        This is the live failure shape: revision pruning cannot drop below one commit, so the
+        store used to remain several GB above its configured 500 MB ceiling forever.
+        """
+        base = tmp_path / "checkpoints"
+        monkeypatch.setattr("tools.checkpoint_manager.CHECKPOINT_BASE", base)
+        old = tmp_path / "old-project"
+        new = tmp_path / "new-project"
+        old.mkdir()
+        new.mkdir()
+        (old / "blob.bin").write_bytes(os.urandom(700_000))
+        (new / "blob.bin").write_bytes(os.urandom(700_000))
+
+        manager = CheckpointManager(enabled=True, max_total_size_mb=0)
+        assert manager.ensure_checkpoint(str(old), "old") is True
+        manager.new_turn()
+        assert manager.ensure_checkpoint(str(new), "new") is True
+
+        old_meta = _project_meta_path(_store_path(base), _project_hash(str(old)))
+        new_meta = _project_meta_path(_store_path(base), _project_hash(str(new)))
+        old_data = json.loads(old_meta.read_text())
+        old_data["last_touch"] = time.time() - 3600
+        old_meta.write_text(json.dumps(old_data))
+
+        prune_checkpoints(
+            retention_days=0,
+            delete_orphans=False,
+            checkpoint_base=base,
+            max_total_size_mb=1,
+        )
+
+        assert not old_meta.exists()
+        assert new_meta.exists()
+        assert store_status(base)["store_size_bytes"] <= 1024 * 1024
+
 
 class TestPruneCheckpointsOrphanAllowlist:
     """P1 fix on PR #69141: the confirmation preview must bind to exactly
